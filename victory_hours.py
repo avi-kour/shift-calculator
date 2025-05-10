@@ -1,62 +1,32 @@
 #!/usr/bin/env python3
-"""
-victory_hours.py  -  Monthly shift summarizer for "ויקטורי"
-
-USAGE:
-    python victory_hours.py input_file output_file
-
-The script reads a shift report (CSV or Excel), applies the business
-rules below, and writes an Excel summary ready for payroll.
-
-Business rules implemented
---------------------------
-1. Each row describes one shift with columns:
-       A: Date-In   (DD/MM/YYYY)
-       D: Time-In   (HH:MM:SS)
-       E: Date-Out
-       F: Time-Out
-   The script auto-detects the header/delimiter pattern used in the
-   reports you export.
-
-2. If a shift crosses midnight, it is *not* split; total hours are
-   counted in the day of Time-In.
-
-3. Pay rates:
-       • Regular hours: up to 8 h.
-       • If shift starts ≥ 18:00 → limit is 7 h.
-       • First   2 h  beyond limit → OT 125 %.
-       • Remaining hours       → OT 150 %.
-       • All time between Friday 18:00 ↔ Saturday 18:00 → 150 %.
-       • Jewish holidays (array inside this script) treated as saturday
-         (from 18:00) → 150 %.
-
-4. If total shift ≥ 6.5 h → deduct 0.5 h from *most expensive* bucket:
-       first 150 %, then 125 %, finally regular.
-
-5. Final summary per employee:
-       • Regular hours
-       • OT 125 %
-       • OT 150 %
-       • Distinct workdays
-
-You can adapt the HOLIDAYS set near the top for future months.
-"""
 
 import sys, os, csv, math
 from datetime import datetime, timedelta
 import pandas as pd
 
-HOLIDAYS = [
-    datetime(2025, 4, 13).date(),  #'Pesach I'
-    datetime(2025, 4, 19).date(),  #'Pesach VII'
-    datetime(2025, 5, 1).date(),   #'Atzmaut'
-    datetime(2025, 6, 2).date(),   #'Shavuot'
-    datetime(2025, 9, 23).date(),  #'Rosh Hashana 5786'
-    datetime(2025, 9, 24).date(),  #'Rosh Hashana II'
-    datetime(2025, 10, 2).date(),  #'Yom Kippur'
-    datetime(2025, 10, 7).date(),  #'Sukkot I'
-    datetime(2025, 10, 14).date()  #'Shmini Atzeret'
-]
+def load_holidays(holidays_path='holidays.csv'):
+    """Load Jewish holidays from a CSV file."""
+    holidays = []
+    try:
+        with open(holidays_path, newline='', encoding='utf-8-sig') as f:
+            reader = csv.reader(f)
+            next(reader, None)  # Skip header row
+            for row in reader:
+                if row and len(row) >= 2:
+                    date_str, description = row[0], row[1]
+                    try:
+                        holiday_date = datetime.strptime(date_str.strip(), "%d/%m/%Y").date()
+                        holidays.append(holiday_date)
+                    except ValueError:
+                        print(f"Warning: Could not parse date '{date_str}' for holiday '{description}'")
+    except FileNotFoundError:
+        print(f"Warning: Holiday file '{holidays_path}' not found. Using default holidays.")
+        return []
+    
+    return holidays
+
+# Load holidays when module is imported
+HOLIDAYS = load_holidays()
 
 # ---------- HELPER FUNCTIONS ----------
 def parse_datetime(date_str: str, time_str: str) -> datetime:
