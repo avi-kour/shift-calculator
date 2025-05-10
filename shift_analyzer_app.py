@@ -1,8 +1,20 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-# import xlsxwriter
-from victory_hours import load_raw, analyze_shift, parse_datetime
+import os
+from victory_hours import load_raw, analyze_shift, parse_datetime, load_holidays, HOLIDAYS
+import sys
+
+# Set Streamlit page configuration for dark theme
+st.set_page_config(
+    page_title="Shift Analyzer",
+    page_icon="⏱️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'About': "Shift Calculator for Victory Supermarkets"
+    }
+)
 
 def process_shifts(file):
     """Process the uploaded file and return the analysis results."""
@@ -42,6 +54,40 @@ def process_shifts(file):
 # Streamlit app
 st.title("Shift Analyzer")
 
+# Sidebar for holidays information
+st.sidebar.title("Configuration")
+st.sidebar.subheader("Jewish Holidays")
+
+# Get the absolute path to the holidays.csv file
+holidays_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'holidays.csv')
+
+# Display holidays in an expander
+with st.sidebar.expander("View Jewish Holidays"):
+    # Create a DataFrame for displaying holidays
+    holiday_data = []
+    for holiday_date in HOLIDAYS:
+        # Format the date in DD/MM/YYYY format
+        formatted_date = holiday_date.strftime("%d/%m/%Y")
+        
+        # Try to find the description from holidays.csv
+        description = "Holiday"  # Default
+        try:
+            with open(holidays_path, 'r', encoding='utf-8-sig') as f:
+                for line in f:
+                    if formatted_date in line:
+                        parts = line.split(',')
+                        if len(parts) > 1:
+                            description = parts[1].strip()
+                            break
+        except Exception:
+            pass
+            
+        holiday_data.append({"Date": formatted_date, "Description": description})
+    
+    holidays_df = pd.DataFrame(holiday_data)
+    st.dataframe(holidays_df, use_container_width=True)
+
+# Main content for shift file
 uploaded_file = st.file_uploader("Upload a shift file (CSV or Excel):", type=["csv", "xlsx", "xls"])
 
 if uploaded_file is not None:
