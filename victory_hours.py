@@ -132,15 +132,75 @@ def analyze_shift(start_dt: datetime, end_dt: datetime) -> tuple:
     return regular, ot125, ot150_total, start_dt.date()
 
 # ---------- LOAD RAW FILE ----------
-def load_raw(path: str) -> list:
-    ext = os.path.splitext(path)[1].lower()
-    if ext in (".xlsx", ".xls"):
-        df = pd.read_excel(path, header=None, dtype=str)
-        rows = df.values.tolist()
-    else:  # assume CSV
-        with open(path, newline='', encoding="utf-8-sig") as f:
-            rows = list(csv.reader(f))
-    # Detect employee sections
+def load_raw_new_format(path: str) -> list:
+    """
+    Parse the new XLS format (October 2025) with chunked employee sections.
+    
+    Structure per employee:
+    - Row: Employee name (col 8) + "עובד:" (col 9)
+    - Row: Column headers (סה"כ, 200%, 175%, 150%, 125%, 100%, יום, יציאה, כניסה, משמרת)
+    - Rows: Shift data with entry (col 8) and exit (col 7) datetimes
+    - Row: Summary row (סה"כ:)
+    
+    We ignore pre-calculated percentages and only use entry/exit times.
+    """
+    df = pd.read_excel(path, engine='xlrd', header=None)
+    shifts = []
+    current_employee = None
+    
+    for idx, row in df.iterrows():
+        row_values = [str(v) if pd.notna(v) else '' for v in row.values]
+        
+        # Check if this is an employee name row (has 'עובד:' in column 9)
+        if len(row_values) > 9 and row_values[9] == 'עובד:':
+            # Employee name is in column 8
+            emp_name_raw = row_values[8].strip()
+            # Keep full name with ID: "11 - איליי", "32 - נור סאסין", "מרינה"
+            current_employee = emp_name_raw
+            continue
+        
+        # Check if this is a header row (skip it)
+        if 'כניסה' in row_values and 'יציאה' in row_values:
+            continue
+        
+        # Check if this is a summary row (skip it)
+        if 'סה"כ:' in row_values or 'כמות משמרות:' in row_values:
+            continue
+        
+        # Try to parse shift data
+        # Shift rows have datetime values: exit in col 7, entry in col 8
+        if current_employee and len(row_values) > 8:
+            try:
+                exit_val = row_values[7]
+                entry_val = row_values[8]
+                
+                # Check if both have datetime format (YYYY-MM-DD HH:MM:SS)
+                if (exit_val and entry_val and 
+                    '-' in exit_val and ':' in exit_val and 
+                    '-' in entry_val and ':' in entry_val):
+                    
+                    # Parse the datetime values
+                    entry_dt = pd.to_datetime(entry_val)
+                    exit_dt = pd.to_datetime(exit_val)
+                    
+                    shifts.append({
+                        "employee": current_employee,
+                        "date_in": entry_dt.strftime("%d/%m/%Y"),
+                        "time_in": entry_dt.strftime("%H:%M:%S"),
+                        "date_out": exit_dt.strftime("%d/%m/%Y"),
+                        "time_out": exit_dt.strftime("%H:%M:%S"),
+                    })
+            except (ValueError, IndexError):
+                # Skip rows that don't have valid datetime values
+                pass
+    
+    return shifts
+
+
+def load_raw_old_format(rows: list) -> list:
+    """
+    Parse the old format with 'קוד עובד' sections.
+    """
     indices = [i for i, r in enumerate(rows) if r and str(r[0]).startswith("קוד עובד")]
     shifts = []
     for idx_num, emp_idx in enumerate(indices):
@@ -165,6 +225,80 @@ def load_raw(path: str) -> list:
                 "time_out": str(r[5]).strip(),
             })
     return shifts
+
+
+def load_raw(path: str) -> list:
+    """
+    Load raw shift data from file, auto-detecting format.
+    Supports both old format (with 'קוד עובד') and new format (October 2025).
+    """
+    ext = os.path.splitext(path)[1].lower()
+    
+    # Try new format first for XLS/XLSX files
+    if ext in (".xlsx", ".xls"):
+        try:
+            # Try new format
+            shifts = load_raw_new_format(path)
+            if shifts:
+                return shifts
+        except Exception:
+            pass
+        
+        # Fall back to old format
+        try:
+            df = pd.read_excel(path, header=None, dtype=str, engine='xlrd' if ext == '.xls' else None)
+        except Exception:
+            # Try with openpyxl engine for .xlsx
+            df = pd.read_excel(path, header=None, dtype=str, engine='openpyxl')
+        rows = df.values.tolist()
+        return load_raw_old_format(rows)
+    
+    else:  # CSV - use old format
+        with open(path, newline='', encoding="utf-8-sig") as f:
+            rows = list(csv.reader(f))
+        return load_raw_old_format(rows)
+
+
+def process_file_to_dataframe(file_path: str) -> pd.DataFrame:
+    """
+    Complete processing pipeline: load file, analyze shifts, aggregate results.
+    Returns a pandas DataFrame ready for display or export.
+    
+    Args:
+        file_path: Path to the shift file (CSV, XLS, or XLSX)
+    
+    Returns:
+        DataFrame with columns: שם עובד, מס שעות רגילות, מס שעות 125 אחוז, 
+        מס שעות 150 אחוז, סהכ שעות, מס ימי עבודה
+    """
+    # Load raw shifts
+    shifts = load_raw(file_path)
+    
+    # Aggregate by employee
+    agg = {}
+    for s in shifts:
+        start_dt = parse_datetime(s["date_in"], s["time_in"])
+        end_dt = parse_datetime(s["date_out"], s["time_out"])
+        reg, ot125, ot150, day = analyze_shift(start_dt, end_dt)
+        emp = s["employee"]
+        if emp not in agg:
+            agg[emp] = {"regular": 0.0, "ot125": 0.0, "ot150": 0.0, "days": set()}
+        agg[emp]["regular"] += reg
+        agg[emp]["ot125"] += ot125
+        agg[emp]["ot150"] += ot150
+        agg[emp]["days"].add(day)
+    
+    # Create records for DataFrame
+    records = [{
+        "שם עובד": emp,
+        "מס שעות רגילות": round(d["regular"], 2),
+        "מס שעות 125 אחוז": round(d["ot125"], 2),
+        "מס שעות 150 אחוז": round(d["ot150"], 2),
+        "סהכ שעות": round(d["regular"] + d["ot125"] + d["ot150"], 2),
+        "מס ימי עבודה": len(d["days"])
+    } for emp, d in agg.items()]
+    
+    return pd.DataFrame(records)
 
 def main():
     if len(sys.argv) < 3:

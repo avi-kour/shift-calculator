@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 import os
-from victory_hours import load_raw, analyze_shift, parse_datetime, load_holidays, HOLIDAYS
-import sys
+import tempfile
+from victory_hours import process_file_to_dataframe, HOLIDAYS
 
 # Set Streamlit page configuration for dark theme
 st.set_page_config(
@@ -19,37 +19,20 @@ st.set_page_config(
 def process_shifts(file):
     """Process the uploaded file and return the analysis results."""
     # Save the uploaded file to a temporary location
-    import tempfile
-    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.name)[1]) as temp_file:
         temp_file.write(file.read())
         temp_file_path = temp_file.name
-
-    # Load raw data using the logic from victory_hours.py
-    shifts = load_raw(temp_file_path)
-
-    agg = {}
-    for s in shifts:
-        start_dt = parse_datetime(s["date_in"], s["time_in"])
-        end_dt = parse_datetime(s["date_out"], s["time_out"])
-        reg, ot125, ot150, day = analyze_shift(start_dt, end_dt)
-        emp = s["employee"]
-        if emp not in agg:
-            agg[emp] = {"regular": 0.0, "ot125": 0.0, "ot150": 0.0, "days": set()}
-        agg[emp]["regular"] += reg
-        agg[emp]["ot125"] += ot125
-        agg[emp]["ot150"] += ot150
-        agg[emp]["days"].add(day)
-
-    records = [{
-        "שם עובד": emp,
-        "מס שעות רגילות": round(d["regular"], 2),
-        "מס שעות 125 אחוז": round(d["ot125"], 2),
-        "מס שעות 150 אחוז": round(d["ot150"], 2),
-        "סהכ שעות": round(d["regular"] + d["ot125"] + d["ot150"], 2),
-        "מס ימי עבודה": len(d["days"])
-    } for emp, d in agg.items()]
-
-    return pd.DataFrame(records)
+    
+    try:
+        # All logic is handled in victory_hours.py
+        result_df = process_file_to_dataframe(temp_file_path)
+        return result_df
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(temp_file_path)
+        except Exception:
+            pass
 
 # Streamlit app
 st.title("Shift Analyzer")

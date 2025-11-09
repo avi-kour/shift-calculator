@@ -84,7 +84,7 @@ The web interface allows viewing all configured holidays in the sidebar.
 1. Clone this repository
 2. Install required packages:
    ```
-   pip install pandas openpyxl
+   pip install -r requirements.txt
    ```
 
 ## Example
